@@ -56,14 +56,19 @@ func (h *WebsocketBridgeHandler) Handle(ginCtx *gin.Context) {
 	remoteHeaders := wsCfg.buildRemoteHeaders()
 	handshakeTimeoutMs := wsCfg.effectiveHandshakeTimeoutMilliseconds()
 
-	remoteWs, err := tls_client.NewWebsocket(tls_client.NewNoopLogger(),
+	wsOptions := []tls_client.WebsocketOption{
 		tls_client.WithTlsClient(tlsClient),
 		tls_client.WithUrl(wsCfg.RequestUrl),
 		tls_client.WithHeaders(remoteHeaders),
 		tls_client.WithReadBufferSize(wsCfg.ReadBufferSize),
 		tls_client.WithWriteBufferSize(wsCfg.WriteBufferSize),
 		tls_client.WithHandshakeTimeoutMilliseconds(handshakeTimeoutMs),
-	)
+	}
+	if wsCfg.EnableCompression {
+		wsOptions = append(wsOptions, tls_client.WithEnableCompression())
+	}
+
+	remoteWs, err := tls_client.NewWebsocket(tls_client.NewNoopLogger(), wsOptions...)
 	if err != nil {
 		tlsClient.CloseIdleConnections()
 		h.logger.Warn("ws bridge connection %s rejected: can not build remote websocket: %s", connID, err.Error())

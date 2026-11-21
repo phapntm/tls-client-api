@@ -60,6 +60,7 @@ type WsConfig struct {
 	HandshakeTimeoutMilliseconds int                      `json:"handshakeTimeoutMilliseconds"`
 	ReadBufferSize               int                      `json:"readBufferSize"`
 	WriteBufferSize              int                      `json:"writeBufferSize"`
+	EnableCompression            bool                     `json:"enableCompression"`
 	InsecureSkipVerify           bool                     `json:"insecureSkipVerify"`
 	WithRandomTLSExtensionOrder  bool                     `json:"withRandomTLSExtensionOrder"`
 	DisableIPV4                  bool                     `json:"disableIPV4"`
