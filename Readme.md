@@ -67,6 +67,9 @@ Config schema (version 1):
 - `protocols` are the WebSocket subprotocols requested from the remote target. If the remote
   selects one, the same protocol is echoed back on the local Upgrade response.
 - The remote HTTP client always forces HTTP/1.1, as required by tls-client's WebSocket support.
+- Remote WebSocket connections offer `permessage-deflate` with `server_no_context_takeover`
+  and `client_no_context_takeover`. If the target accepts, messages are compressed and
+  decompressed automatically; the relayed application payloads remain unchanged.
 - On a successful upgrade, the local response also carries an informational
   `x-tls-client-ws-protocol: 1` header. It is metadata only - clients must not depend on it.
 
@@ -120,21 +123,21 @@ Or, if you prefer crypto:
 
 ---
 
-## 🛡️ Need Antibot Bypass?
+## ??? Need Antibot Bypass?
 
 <a href="https://hypersolutions.co/?utm_source=github&utm_medium=readme&utm_campaign=tls-client-api" target="_blank"><img src="https://raw.githubusercontent.com/bogdanfinn/tls-client/master/.github/assets/hypersolutions.jpg" height="47" width="149"></a>
 
 TLS fingerprinting alone isn't enough for modern bot protection. **[Hyper Solutions](https://hypersolutions.co?utm_source=github&utm_medium=readme&utm_campaign=tls-client-api)** provides the missing piece - API endpoints that generate valid antibot tokens for:
 
-**Akamai** • **DataDome** • **Kasada** • **Incapsula**
+**Akamai**  **DataDome**  **Kasada**  **Incapsula**
 
 No browser automation. Just simple API calls that return the exact cookies and headers these systems require.
 
-🚀 **[Get Your API Key](https://hypersolutions.co?utm_source=github&utm_medium=readme&utm_campaign=tls-client-api)** | 📖 **[Docs](https://docs.justhyped.dev)** | 💬 **[Discord](https://discord.gg/akamai)**
+?? **[Get Your API Key](https://hypersolutions.co?utm_source=github&utm_medium=readme&utm_campaign=tls-client-api)** | ?? **[Docs](https://docs.justhyped.dev)** | ?? **[Discord](https://discord.gg/akamai)**
 
 ---
 
-## 📦 Need the data, not the scraper?
+## ?? Need the data, not the scraper?
 
 <a href="https://pckt.sh/?utm_source=github&utm_medium=sponsor&utm_campaign=tls-client-api">
   <img src="https://pckt.sh/press/banner.png" alt="pckt.sh: unofficial APIs & datasets for developers" width="100%">
@@ -142,4 +145,4 @@ No browser automation. Just simple API calls that return the exact cookies and h
 
 [pckt.sh](https://pckt.sh/?utm_source=github&utm_medium=sponsor&utm_campaign=tls-client-api) gives you StockX, GOAT, Shopify and more as clean JSON through one API key. We handle the TLS fingerprints, proxies and retries, so you don't have to.
 
-[Get your API key](https://pckt.sh/auth/signup?utm_source=github&utm_medium=sponsor&utm_campaign=tls-client-api) · [Docs](https://pckt.sh/docs?utm_source=github&utm_medium=sponsor&utm_campaign=tls-client-api) · [Pricing](https://pckt.sh/pricing?utm_source=github&utm_medium=sponsor&utm_campaign=tls-client-api)
+[Get your API key](https://pckt.sh/auth/signup?utm_source=github&utm_medium=sponsor&utm_campaign=tls-client-api) � [Docs](https://pckt.sh/docs?utm_source=github&utm_medium=sponsor&utm_campaign=tls-client-api) � [Pricing](https://pckt.sh/pricing?utm_source=github&utm_medium=sponsor&utm_campaign=tls-client-api)

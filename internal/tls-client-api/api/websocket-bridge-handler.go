@@ -60,6 +60,7 @@ func (h *WebsocketBridgeHandler) Handle(ginCtx *gin.Context) {
 		tls_client.WithTlsClient(tlsClient),
 		tls_client.WithUrl(wsCfg.RequestUrl),
 		tls_client.WithHeaders(remoteHeaders),
+		tls_client.WithEnableCompression(),
 		tls_client.WithReadBufferSize(wsCfg.ReadBufferSize),
 		tls_client.WithWriteBufferSize(wsCfg.WriteBufferSize),
 		tls_client.WithHandshakeTimeoutMilliseconds(handshakeTimeoutMs),
