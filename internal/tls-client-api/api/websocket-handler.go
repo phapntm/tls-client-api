@@ -2,153 +2,193 @@ package api
 
 import (
 	"context"
-	"errors"
-	"net/http"
-	"net/url"
+	"fmt"
 	"time"
 
-	tls_client "github.com/bogdanfinn/tls-client"
+	tls_client_cffi_src "github.com/bogdanfinn/tls-client/cffi_src"
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
-	localws "github.com/gorilla/websocket"
+	"github.com/justtrackio/gosoline/pkg/apiserver"
 	"github.com/justtrackio/gosoline/pkg/cfg"
 	"github.com/justtrackio/gosoline/pkg/log"
 )
 
-// WebsocketBridgeHandler implements GET /api/ws: a generic WebSocket-to-WebSocket bridge
-// between a local Node.js client and a remote target, tunnelled through bogdanfinn/tls-client
-// so the remote connection gets tls-client's TLS fingerprinting, proxy support and profiles.
-//
-// The local connection is only upgraded (HTTP 101) after the remote websocket handshake has
-// already succeeded. This is a plain gin.HandlerFunc rather than the apiserver JSON handler
-// abstraction because it needs to perform an HTTP Upgrade instead of returning a JSON body.
-type WebsocketBridgeHandler struct {
+// wsReadTimeoutMargin leaves time to write the read response before the server write timeout hits.
+const wsReadTimeoutMargin = time.Second
+
+type WsConnectHandler struct {
 	logger log.Logger
 }
 
-func NewWebsocketBridgeHandler(ctx context.Context, config cfg.Config, logger log.Logger) (gin.HandlerFunc, error) {
-	handler := &WebsocketBridgeHandler{
-		logger: logger.WithChannel("ws-bridge"),
+func NewWsConnectHandler(ctx context.Context, config cfg.Config, logger log.Logger) (gin.HandlerFunc, error) {
+	handler := WsConnectHandler{
+		logger: logger,
 	}
 
-	return handler.Handle, nil
+	return apiserver.CreateJsonHandler(handler), nil
 }
 
-func (h *WebsocketBridgeHandler) Handle(ginCtx *gin.Context) {
-	connID := uuid.New().String()
+func (wh WsConnectHandler) GetInput() interface{} {
+	return &tls_client_cffi_src.WsConnectInput{}
+}
 
-	rawConfig := ginCtx.GetHeader(wsConfigHeaderName)
+func (wh WsConnectHandler) Handle(ctx context.Context, request *apiserver.Request) (*apiserver.Response, error) {
+	input, ok := request.Body.(*tls_client_cffi_src.WsConnectInput)
 
-	wsCfg, err := decodeWsConfig(rawConfig)
-	if err != nil {
-		h.logger.Warn("ws bridge connection %s rejected: invalid config: %s", connID, err.Error())
-		ginCtx.JSON(http.StatusBadRequest, gin.H{"error": "invalid websocket configuration"})
-		return
+	if !ok {
+		err := tls_client_cffi_src.NewTLSClientError(fmt.Errorf("bad request body provided"))
+		return handleErrorResponse(wh.logger, "", false, err)
 	}
 
-	tlsClient, err := buildRemoteHttpClient(wsCfg)
-	if err != nil {
-		h.logger.Warn("ws bridge connection %s rejected: can not build tls client: %s", connID, err.Error())
-		ginCtx.JSON(http.StatusBadRequest, gin.H{"error": "invalid websocket configuration"})
-		return
-	}
-
-	remoteHeaders := wsCfg.buildRemoteHeaders()
-	handshakeTimeoutMs := wsCfg.effectiveHandshakeTimeoutMilliseconds()
-
-	remoteWs, err := tls_client.NewWebsocket(tls_client.NewNoopLogger(),
-		tls_client.WithTlsClient(tlsClient),
-		tls_client.WithUrl(wsCfg.RequestUrl),
-		tls_client.WithHeaders(remoteHeaders),
-		tls_client.WithReadBufferSize(wsCfg.ReadBufferSize),
-		tls_client.WithWriteBufferSize(wsCfg.WriteBufferSize),
-		tls_client.WithHandshakeTimeoutMilliseconds(handshakeTimeoutMs),
-	)
-	if err != nil {
-		tlsClient.CloseIdleConnections()
-		h.logger.Warn("ws bridge connection %s rejected: can not build remote websocket: %s", connID, err.Error())
-		ginCtx.JSON(http.StatusBadRequest, gin.H{"error": "invalid websocket configuration"})
-		return
-	}
-
-	targetHost := safeHost(wsCfg.RequestUrl)
-	connectStart := time.Now()
-
-	remoteConn, err := remoteWs.Connect(ginCtx.Request.Context())
-	if err != nil {
-		tlsClient.CloseIdleConnections()
-
-		status := http.StatusBadGateway
-		if errors.Is(err, context.DeadlineExceeded) {
-			status = http.StatusGatewayTimeout
+	out, clientErr := tls_client_cffi_src.WsConnect(*input)
+	if clientErr != nil {
+		withSession := input.SessionId != nil && *input.SessionId != ""
+		sessionId := ""
+		if withSession {
+			sessionId = *input.SessionId
 		}
 
-		h.logger.Warn(
-			"ws bridge connection %s remote handshake failed target=%s identifier=%s proxy=%t duration=%s",
-			connID, targetHost, wsCfg.TlsClientIdentifier, wsCfg.ProxyUrl != "", time.Since(connectStart),
-		)
-
-		ginCtx.JSON(status, gin.H{"error": "remote websocket handshake failed"})
-		return
+		return handleErrorResponse(wh.logger, sessionId, withSession, clientErr)
 	}
 
-	remoteProtocol := remoteConn.Subprotocol()
-	if remoteProtocol != "" && !containsString(wsCfg.Protocols, remoteProtocol) {
-		_ = remoteConn.Close()
-		tlsClient.CloseIdleConnections()
-
-		h.logger.Warn("ws bridge connection %s remote selected unrequested subprotocol %q", connID, remoteProtocol)
-		ginCtx.JSON(http.StatusBadGateway, gin.H{"error": "remote selected unsupported subprotocol"})
-		return
-	}
-
-	responseHeader := http.Header{}
-	if remoteProtocol != "" {
-		responseHeader.Set("Sec-WebSocket-Protocol", remoteProtocol)
-	}
-	// Optional debug/version negotiation metadata; clients must not depend on it.
-	responseHeader.Set(wsProtocolResponseHeaderName, wsProtocolVersion)
-
-	upgrader := localws.Upgrader{
-		ReadBufferSize:  wsCfg.ReadBufferSize,
-		WriteBufferSize: wsCfg.WriteBufferSize,
-		CheckOrigin:     func(r *http.Request) bool { return true },
-	}
-
-	localConn, err := upgrader.Upgrade(ginCtx.Writer, ginCtx.Request, responseHeader)
-	if err != nil {
-		_ = remoteConn.Close()
-		tlsClient.CloseIdleConnections()
-
-		h.logger.Warn("ws bridge connection %s local upgrade failed: %s", connID, err.Error())
-		return
-	}
-
-	h.logger.Info(
-		"ws bridge connection %s established target=%s identifier=%s proxy=%t duration=%s",
-		connID, targetHost, wsCfg.TlsClientIdentifier, wsCfg.ProxyUrl != "", time.Since(connectStart),
-	)
-
-	session := &wsBridgeSession{
-		connID:     connID,
-		logger:     h.logger,
-		localConn:  localConn,
-		remoteConn: remoteConn,
-		tlsClient:  tlsClient,
-	}
-
-	session.run()
-
-	h.logger.Info("ws bridge connection %s closed", connID)
+	return apiserver.NewJsonResponse(out), nil
 }
 
-// safeHost extracts just the host portion of a URL for logging, never the full URL (which may
-// contain sensitive query parameters).
-func safeHost(rawUrl string) string {
-	parsed, err := url.Parse(rawUrl)
-	if err != nil {
-		return "unknown"
+type WsReadHandler struct {
+	logger         log.Logger
+	maxReadTimeout time.Duration
+}
+
+func NewWsReadHandler(ctx context.Context, config cfg.Config, logger log.Logger) (gin.HandlerFunc, error) {
+	settings := &apiserver.Settings{}
+	config.UnmarshalKey("api", settings)
+
+	handler := WsReadHandler{
+		logger:         logger,
+		maxReadTimeout: settings.Timeout.Write - wsReadTimeoutMargin,
 	}
 
-	return parsed.Host
+	return apiserver.CreateJsonHandler(handler), nil
+}
+
+func (wh WsReadHandler) GetInput() interface{} {
+	return &tls_client_cffi_src.WsReadInput{}
+}
+
+func (wh WsReadHandler) Handle(ctx context.Context, request *apiserver.Request) (*apiserver.Response, error) {
+	input, ok := request.Body.(*tls_client_cffi_src.WsReadInput)
+
+	if !ok {
+		err := tls_client_cffi_src.NewTLSClientError(fmt.Errorf("bad request body provided"))
+		return handleErrorResponse(wh.logger, "", false, err)
+	}
+
+	// Without a bound the read outlives the HTTP request and the next message would be consumed
+	// after the server already dropped the response, so the message would be lost.
+	maxReadTimeoutMilliseconds := int(wh.maxReadTimeout.Milliseconds())
+	if input.TimeoutMilliseconds <= 0 || input.TimeoutMilliseconds > maxReadTimeoutMilliseconds {
+		input.TimeoutMilliseconds = maxReadTimeoutMilliseconds
+	}
+
+	out, clientErr := tls_client_cffi_src.WsRead(*input)
+	if clientErr != nil {
+		return handleErrorResponse(wh.logger, "", false, clientErr)
+	}
+
+	return apiserver.NewJsonResponse(out), nil
+}
+
+type WsWriteHandler struct {
+	logger log.Logger
+}
+
+func NewWsWriteHandler(ctx context.Context, config cfg.Config, logger log.Logger) (gin.HandlerFunc, error) {
+	handler := WsWriteHandler{
+		logger: logger,
+	}
+
+	return apiserver.CreateJsonHandler(handler), nil
+}
+
+func (wh WsWriteHandler) GetInput() interface{} {
+	return &tls_client_cffi_src.WsWriteInput{}
+}
+
+func (wh WsWriteHandler) Handle(ctx context.Context, request *apiserver.Request) (*apiserver.Response, error) {
+	input, ok := request.Body.(*tls_client_cffi_src.WsWriteInput)
+
+	if !ok {
+		err := tls_client_cffi_src.NewTLSClientError(fmt.Errorf("bad request body provided"))
+		return handleErrorResponse(wh.logger, "", false, err)
+	}
+
+	out, clientErr := tls_client_cffi_src.WsWrite(*input)
+	if clientErr != nil {
+		return handleErrorResponse(wh.logger, "", false, clientErr)
+	}
+
+	return apiserver.NewJsonResponse(out), nil
+}
+
+type WsCloseHandler struct {
+	logger log.Logger
+}
+
+func NewWsCloseHandler(ctx context.Context, config cfg.Config, logger log.Logger) (gin.HandlerFunc, error) {
+	handler := WsCloseHandler{
+		logger: logger,
+	}
+
+	return apiserver.CreateJsonHandler(handler), nil
+}
+
+func (wh WsCloseHandler) GetInput() interface{} {
+	return &tls_client_cffi_src.WsCloseInput{}
+}
+
+func (wh WsCloseHandler) Handle(ctx context.Context, request *apiserver.Request) (*apiserver.Response, error) {
+	input, ok := request.Body.(*tls_client_cffi_src.WsCloseInput)
+
+	if !ok {
+		err := tls_client_cffi_src.NewTLSClientError(fmt.Errorf("bad request body provided"))
+		return handleErrorResponse(wh.logger, "", false, err)
+	}
+
+	out, clientErr := tls_client_cffi_src.WsClose(*input)
+	if clientErr != nil {
+		return handleErrorResponse(wh.logger, "", false, clientErr)
+	}
+
+	return apiserver.NewJsonResponse(out), nil
+}
+
+type WsStatsHandler struct {
+	logger log.Logger
+}
+
+func NewWsStatsHandler(ctx context.Context, config cfg.Config, logger log.Logger) (gin.HandlerFunc, error) {
+	handler := WsStatsHandler{
+		logger: logger,
+	}
+
+	return apiserver.CreateJsonHandler(handler), nil
+}
+
+func (wh WsStatsHandler) GetInput() interface{} {
+	return &tls_client_cffi_src.WsStatsInput{}
+}
+
+func (wh WsStatsHandler) Handle(ctx context.Context, request *apiserver.Request) (*apiserver.Response, error) {
+	input, ok := request.Body.(*tls_client_cffi_src.WsStatsInput)
+
+	if !ok {
+		err := tls_client_cffi_src.NewTLSClientError(fmt.Errorf("bad request body provided"))
+		return handleErrorResponse(wh.logger, "", false, err)
+	}
+
+	out, clientErr := tls_client_cffi_src.WsStats(*input)
+	if clientErr != nil {
+		return handleErrorResponse(wh.logger, "", false, clientErr)
+	}
+
+	return apiserver.NewJsonResponse(out), nil
 }
