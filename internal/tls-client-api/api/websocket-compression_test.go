@@ -13,12 +13,16 @@ import (
 )
 
 func TestWebsocketBridge_RemoteCompression(t *testing.T) {
+	compressionEnabled, compressionDisabled := true, false
 	for _, testCase := range []struct {
 		name              string
+		enableCompression *bool
 		acceptCompression bool
 	}{
-		{name: "accepted", acceptCompression: true},
-		{name: "declined", acceptCompression: false},
+		{name: "accepted", enableCompression: &compressionEnabled, acceptCompression: true},
+		{name: "declined", enableCompression: &compressionEnabled, acceptCompression: false},
+		{name: "disabled", enableCompression: &compressionDisabled, acceptCompression: true},
+		{name: "default", acceptCompression: true},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			offeredExtensions := make(chan string, 1)
@@ -50,7 +54,11 @@ func TestWebsocketBridge_RemoteCompression(t *testing.T) {
 			t.Cleanup(remote.Close)
 			bridge := startBridgeServer(t)
 
-			conn, resp, err := dialBridge(t, bridge, testApiKey, echoConfig(remote))
+			config := echoConfig(remote)
+			if testCase.enableCompression != nil {
+				config["enableCompression"] = *testCase.enableCompression
+			}
+			conn, resp, err := dialBridge(t, bridge, testApiKey, config)
 			require.NoError(t, err)
 			require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
 			defer conn.Close()
@@ -59,9 +67,13 @@ func TestWebsocketBridge_RemoteCompression(t *testing.T) {
 
 			select {
 			case extensions := <-offeredExtensions:
-				require.Contains(t, extensions, "permessage-deflate")
-				require.Contains(t, extensions, "server_no_context_takeover")
-				require.Contains(t, extensions, "client_no_context_takeover")
+				if testCase.enableCompression != nil && *testCase.enableCompression {
+					require.Contains(t, extensions, "permessage-deflate")
+					require.Contains(t, extensions, "server_no_context_takeover")
+					require.Contains(t, extensions, "client_no_context_takeover")
+				} else {
+					require.Empty(t, extensions)
+				}
 			case <-time.After(5 * time.Second):
 				t.Fatal("remote server did not receive the compression offer")
 			}

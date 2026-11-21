@@ -50,6 +50,7 @@ Config schema (version 1):
   "handshakeTimeoutMilliseconds": 10000,
   "readBufferSize": 0,
   "writeBufferSize": 0,
+  "enableCompression": false,
   "insecureSkipVerify": false,
   "withRandomTLSExtensionOrder": false,
   "disableIPV4": false,
@@ -67,9 +68,10 @@ Config schema (version 1):
 - `protocols` are the WebSocket subprotocols requested from the remote target. If the remote
   selects one, the same protocol is echoed back on the local Upgrade response.
 - The remote HTTP client always forces HTTP/1.1, as required by tls-client's WebSocket support.
-- Remote WebSocket connections offer `permessage-deflate` with `server_no_context_takeover`
-  and `client_no_context_takeover`. If the target accepts, messages are compressed and
-  decompressed automatically; the relayed application payloads remain unchanged.
+- `enableCompression` defaults to `false`. Set it to `true` to offer `permessage-deflate`
+  to the remote target with `server_no_context_takeover` and `client_no_context_takeover`.
+  If the target accepts, messages are compressed and decompressed automatically; the
+  relayed application payloads remain unchanged.
 - On a successful upgrade, the local response also carries an informational
   `x-tls-client-ws-protocol: 1` header. It is metadata only - clients must not depend on it.
 
