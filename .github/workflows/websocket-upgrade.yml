@@ -1,0 +1,63 @@
+name: WebSocket upgrade checks
+
+on:
+  push:
+    branches:
+      - upgrade/tls-client-v1.18.1
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: websocket-upgrade-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bridge:
+    name: ${{ matrix.os }} / ${{ matrix.revision }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        revision: [baseline, upgraded]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.revision == 'baseline' && '80844ba7779e1eaf26170986307bcddba1b97039' || github.sha }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.3'
+          cache: true
+      - name: Verify dependencies
+        run: |
+          go version
+          go mod download
+          go mod verify
+      - name: Test all packages
+        run: go test -mod=readonly -count=1 -timeout=180s -v ./...
+      - name: Check races in upgraded bridge
+        if: runner.os == 'Linux' && matrix.revision == 'upgraded'
+        run: go test -mod=readonly -race -count=1 -timeout=180s ./internal/tls-client-api/api
+      - name: Build standalone API
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          mkdir -p dist
+          go build -mod=readonly -trimpath -o dist/tls-client-api-${{ runner.os }}-${{ runner.arch }}-${{ matrix.revision }}${{ runner.os == 'Windows' && '.exe' || '' }} ./cmd/tls-client-api
+      - name: Upload tested upgrade binary
+        if: matrix.revision == 'upgraded'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tls-client-api-v1.18.1-${{ runner.os }}-${{ runner.arch }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
